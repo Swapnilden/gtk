@@ -36,10 +36,4 @@ typedef void (GtkAtspiTextSelectionCallback) (gpointer    data,
                                               const char *kind,
                                               int         position);
 
-void gtk_atspi_connect_text_signals    (GtkAccessible *accessible,
-                                        GtkAtspiTextChangedCallback text_changed,
-                                        GtkAtspiTextSelectionCallback selection_changed,
-                                        gpointer   data);
-void gtk_atspi_disconnect_text_signals (GtkAccessible *accessible);
-
 G_END_DECLS

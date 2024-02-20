@@ -734,55 +734,6 @@ static const GDBusInterfaceVTable accessible_vtable = {
 };
 /* }}} */
 /* {{{ Change notification */
-static void
-emit_text_changed (GtkAtSpiContext *self,
-                   const char      *kind,
-                   int              start,
-                   int              end,
-                   const char      *text)
-{
-  if (self->connection == NULL)
-    return;
-
-  g_dbus_connection_emit_signal (self->connection,
-                                 NULL,
-                                 self->context_path,
-                                 "org.a11y.atspi.Event.Object",
-                                 "TextChanged",
-                                 g_variant_new ("(siiva{sv})",
-                                                kind, start, end,
-                                                g_variant_new_string (text),
-                                                NULL),
-                                 NULL);
-}
-
-static void
-emit_text_selection_changed (GtkAtSpiContext *self,
-                             const char      *kind,
-                             int              cursor_position)
-{
-  if (self->connection == NULL)
-    return;
-
-  if (strcmp (kind, "text-caret-moved") == 0)
-    g_dbus_connection_emit_signal (self->connection,
-                                   NULL,
-                                   self->context_path,
-                                   "org.a11y.atspi.Event.Object",
-                                   "TextCaretMoved",
-                                   g_variant_new ("(siiva{sv})",
-                                                  "", cursor_position, 0, g_variant_new_string (""), NULL),
-                                 NULL);
-  else
-    g_dbus_connection_emit_signal (self->connection,
-                                   NULL,
-                                   self->context_path,
-                                   "org.a11y.atspi.Event.Object",
-                                   "TextSelectionChanged",
-                                   g_variant_new ("(siiva{sv})",
-                                                  "", 0, 0, g_variant_new_string (""), NULL),
-                                   NULL);
-}
 
 static void
 emit_selection_changed (GtkAtSpiContext *self,
@@ -1439,10 +1390,6 @@ register_object (GtkAtSpiRoot *root,
 {
   GtkAccessible *accessible = gtk_at_context_get_accessible (GTK_AT_CONTEXT (context));
 
-  gtk_atspi_connect_text_signals (accessible,
-                                  (GtkAtspiTextChangedCallback *)emit_text_changed,
-                                  (GtkAtspiTextSelectionCallback *)emit_text_selection_changed,
-                                  context);
   gtk_atspi_connect_selection_signals (accessible,
                                        (GtkAtspiSelectionCallback *)emit_selection_changed,
                                        context);
@@ -1524,7 +1471,6 @@ gtk_at_spi_context_unrealize (GtkATContext *context)
   emit_defunct (self);
   gtk_at_spi_root_unregister (self->root, self);
 
-  gtk_atspi_disconnect_text_signals (accessible);
   gtk_atspi_disconnect_selection_signals (accessible);
   gtk_at_spi_context_unregister_object (self);
 
