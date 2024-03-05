@@ -52,6 +52,7 @@
 #include "gdktoplevel-wayland-private.h"
 
 #include "linux-dmabuf-unstable-v1-client-protocol.h"
+#include "presentation-time-client-protocol.h"
 
 
 /**
@@ -311,6 +312,9 @@ gdk_wayland_surface_frame_callback (GdkSurface *surface,
         timings->refresh_interval = G_GINT64_CONSTANT(1000000000) / refresh_rate;
     }
 
+  if (impl->use_presentation_feedback)
+    return;
+
   fill_presentation_time_from_frame_time (timings, time);
 
   timings->complete = TRUE;
@@ -337,6 +341,82 @@ frame_callback (void               *data,
 
 static const struct wl_callback_listener frame_listener = {
   frame_callback
+};
+
+static void
+gdk_wayland_surface_presentation_sync_output (void                            *data,
+                                              struct wp_presentation_feedback *feedback,
+                                              struct wl_output                *output)
+{
+}
+
+static gint64
+time_from_wayland (uint32_t tv_sec_hi,
+                   uint32_t tv_sec_lo,
+                   uint32_t tv_nsec)
+{
+  guint64 t = tv_sec_hi;
+  t <<= 32;
+  t |= tv_sec_lo;
+  t *= G_USEC_PER_SEC;
+  t += tv_nsec / 1000L;
+  return (gint64)t;
+}
+
+static void
+gdk_wayland_surface_presentation_presented (void                            *data,
+                                            struct wp_presentation_feedback *feedback,
+                                            uint32_t                         tv_sec_hi,
+                                            uint32_t                         tv_sec_lo,
+                                            uint32_t                         tv_nsec,
+                                            uint32_t                         refresh,
+                                            uint32_t                         seq_hi,
+                                            uint32_t                         seq_lo,
+                                            uint32_t                         flags)
+{
+  GdkWaylandSurface *self = data;
+  GdkFrameTimings *timings;
+  GdkFrameClock *frame_clock;
+  gint64 pending;
+
+  g_assert (GDK_IS_WAYLAND_SURFACE (self));
+
+  g_clear_pointer (&self->presentation_feedback, wp_presentation_feedback_destroy);
+
+  pending = self->pending_presentation_counter;
+  self->pending_presentation_counter = 0;
+
+  if (!(frame_clock = gdk_surface_get_frame_clock (GDK_SURFACE (self))) ||
+      !(timings = gdk_frame_clock_get_timings (frame_clock, pending)))
+    return;
+
+  timings->presentation_time = time_from_wayland (tv_sec_hi, tv_sec_lo, tv_nsec);
+  timings->complete = TRUE;
+
+  if ((_gdk_debug_flags & GDK_DEBUG_FRAMES) != 0)
+    _gdk_frame_clock_debug_print_timings (frame_clock, timings);
+
+  if (GDK_PROFILER_IS_RUNNING)
+    _gdk_frame_clock_add_timings_to_profiler (frame_clock, timings);
+}
+
+static void
+gdk_wayland_surface_presentation_discarded (void                            *data,
+                                            struct wp_presentation_feedback *feedback)
+{
+  GdkWaylandSurface *self = data;
+
+  g_assert (GDK_IS_WAYLAND_SURFACE (self));
+
+  self->pending_presentation_counter = 0;
+
+  g_clear_pointer (&self->presentation_feedback, wp_presentation_feedback_destroy);
+}
+
+static const struct wp_presentation_feedback_listener presentation_feedback_listener = {
+  gdk_wayland_surface_presentation_sync_output,
+  gdk_wayland_surface_presentation_presented,
+  gdk_wayland_surface_presentation_discarded,
 };
 
 static void
@@ -386,6 +466,7 @@ void
 gdk_wayland_surface_request_frame (GdkSurface *surface)
 {
   GdkWaylandSurface *self = GDK_WAYLAND_SURFACE (surface);
+  GdkWaylandDisplay *wayland_display;
   GdkFrameClock *clock;
 
   if (self->frame_callback != NULL)
@@ -396,6 +477,20 @@ gdk_wayland_surface_request_frame (GdkSurface *surface)
   self->frame_callback = wl_surface_frame (self->display_server.wl_surface);
   wl_proxy_set_queue ((struct wl_proxy *) self->frame_callback, NULL);
   wl_callback_add_listener (self->frame_callback, &frame_listener, surface);
+
+  wayland_display = GDK_WAYLAND_DISPLAY (gdk_surface_get_display (surface));
+
+  if (wayland_display->presentation)
+    {
+      self->presentation_feedback = wp_presentation_feedback (wayland_display->presentation,
+                                                              self->display_server.wl_surface);
+      wp_presentation_feedback_add_listener (self->presentation_feedback,
+                                             &presentation_feedback_listener,
+                                             self);
+      self->pending_presentation_counter = gdk_frame_clock_get_frame_counter (clock);
+    }
+
+  self->use_presentation_feedback = self->presentation_feedback != NULL;
 
   for (gsize i = 0; i < gdk_surface_get_n_subsurfaces (surface); i++)
     {
@@ -1042,6 +1137,7 @@ gdk_wayland_surface_hide_surface (GdkSurface *surface)
 
   unmap_popups_for_surface (surface);
 
+  g_clear_pointer (&impl->presentation_feedback, wp_presentation_feedback_destroy);
   g_clear_pointer (&impl->frame_callback, wl_callback_destroy);
   if (impl->awaiting_frame_frozen)
     {

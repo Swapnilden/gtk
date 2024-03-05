@@ -44,11 +44,15 @@ struct _GdkWaylandSurface
   struct wl_event_queue *event_queue;
   struct wl_callback *frame_callback;
 
+  struct wp_presentation_feedback *presentation_feedback;
+  gint64 pending_presentation_counter;
+
   unsigned int initial_configure_received : 1;
   unsigned int has_uncommitted_ack_configure : 1;
   unsigned int has_pending_subsurface_commits : 1;
   unsigned int mapped : 1;
   unsigned int awaiting_frame_frozen : 1;
+  unsigned int use_presentation_feedback : 1;
 
   int pending_buffer_offset_x;
   int pending_buffer_offset_y;
